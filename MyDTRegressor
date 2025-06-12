@@ -1,0 +1,151 @@
+#include <vector>
+#include <memory>
+#include <set>
+#include <tuple>
+#include <limits>
+#include <cmath>
+#include <algorithm>
+#include <numeric>
+
+class MyDTRegressor {
+public:
+    MyDTRegressor(int max_depth = 5, int min_samples_split = 2)
+        : max_depth(max_depth), min_samples_split(min_samples_split) {}
+
+    void fit(const std::vector<std::vector<double>>& X, const std::vector<double>& y) {
+        tree = build_tree(X, y, 0);
+    }
+
+    std::vector<double> predict(const std::vector<std::vector<double>>& X) const {
+        std::vector<double> preds;
+        for (const auto& x : X) {
+            preds.push_back(predict_sample(x, tree.get()));
+        }
+        return preds;
+    }
+
+private:
+    struct Node {
+        int feature_index;
+        double threshold;
+        std::unique_ptr<Node> left;
+        std::unique_ptr<Node> right;
+        double value;
+
+        Node(int feature_index = -1, double threshold = 0.0, double value = std::numeric_limits<double>::quiet_NaN())
+            : feature_index(feature_index), threshold(threshold), value(value) {}
+    };
+
+    int max_depth;
+    int min_samples_split;
+    std::unique_ptr<Node> tree;
+
+    std::unique_ptr<Node> build_tree(const std::vector<std::vector<double>>& X,
+                                     const std::vector<double>& y,
+                                     int depth) {
+        int num_samples = X.size();
+        int num_features = X[0].size();
+
+        if (depth >= max_depth || num_samples < min_samples_split || is_pure(y)) {
+            return std::make_unique<Node>(-1, 0.0, mean(y));
+        }
+
+        int best_feature = -1;
+        double best_threshold = 0.0;
+        double best_mse = std::numeric_limits<double>::infinity();
+        std::pair<std::vector<int>, std::vector<int>> best_splits;
+
+        for (int feature_index = 0; feature_index < num_features; ++feature_index) {
+            std::set<double> thresholds;
+            for (const auto& row : X) {
+                thresholds.insert(row[feature_index]);
+            }
+
+            for (double threshold : thresholds) {
+                std::vector<int> left_indices, right_indices;
+                for (int i = 0; i < num_samples; ++i) {
+                    if (X[i][feature_index] <= threshold)
+                        left_indices.push_back(i);
+                    else
+                        right_indices.push_back(i);
+                }
+
+                if (left_indices.empty() || right_indices.empty()) continue;
+
+                double mse_val = calculate_mse(y, left_indices, right_indices);
+                if (mse_val < best_mse) {
+                    best_mse = mse_val;
+                    best_feature = feature_index;
+                    best_threshold = threshold;
+                    best_splits = {left_indices, right_indices};
+                }
+            }
+        }
+
+        if (best_feature == -1) {
+            return std::make_unique<Node>(-1, 0.0, mean(y));
+        }
+
+        std::vector<std::vector<double>> X_left, X_right;
+        std::vector<double> y_left, y_right;
+
+        for (int idx : best_splits.first) {
+            X_left.push_back(X[idx]);
+            y_left.push_back(y[idx]);
+        }
+        for (int idx : best_splits.second) {
+            X_right.push_back(X[idx]);
+            y_right.push_back(y[idx]);
+        }
+
+        auto left_node = build_tree(X_left, y_left, depth + 1);
+        auto right_node = build_tree(X_right, y_right, depth + 1);
+
+        auto node = std::make_unique<Node>(best_feature, best_threshold);
+        node->left = std::move(left_node);
+        node->right = std::move(right_node);
+        return node;
+    }
+
+    double predict_sample(const std::vector<double>& x, const Node* node) const {
+        if (!node->left && !node->right) {
+            return node->value;
+        }
+
+        if (x[node->feature_index] <= node->threshold) {
+            return predict_sample(x, node->left.get());
+        } else {
+            return predict_sample(x, node->right.get());
+        }
+    }
+
+    bool is_pure(const std::vector<double>& y) const {
+        for (size_t i = 1; i < y.size(); ++i) {
+            if (y[i] != y[0]) return false;
+        }
+        return true;
+    }
+
+    double mean(const std::vector<double>& y) const {
+        return std::accumulate(y.begin(), y.end(), 0.0) / y.size();
+    }
+
+    double calculate_mse(const std::vector<double>& y,
+                         const std::vector<int>& left_indices,
+                         const std::vector<int>& right_indices) const {
+        auto mse = [](const std::vector<double>& vals) {
+            if (vals.empty()) return 0.0;
+            double m = std::accumulate(vals.begin(), vals.end(), 0.0) / vals.size();
+            double sum = 0.0;
+            for (double v : vals) sum += (v - m) * (v - m);
+            return sum / vals.size();
+        };
+
+        std::vector<double> y_left, y_right;
+        for (int idx : left_indices) y_left.push_back(y[idx]);
+        for (int idx : right_indices) y_right.push_back(y[idx]);
+
+        double total = y_left.size() + y_right.size();
+        return (y_left.size() * mse(y_left) + y_right.size() * mse(y_right)) / total;
+    }
+};
